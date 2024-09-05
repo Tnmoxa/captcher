@@ -3,6 +3,11 @@ import logging
 import os
 import requests
 from dotenv import load_dotenv
+from PIL import Image
+import numpy as np
+import string
+from io import BytesIO
+import cv2
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
@@ -12,6 +17,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message
 from aiogram.enums import ParseMode
+from tensorflow.keras.models import load_model
+
+import requests
+import numpy as np
+import cv2
 
 load_dotenv()
 
@@ -19,6 +29,8 @@ dp = Dispatcher()
 chats_id = os.environ.get('CHAT_ID')
 mode = os.environ.get('MODE')
 
+symbols = string.ascii_uppercase + "0123456789"
+num_symbols = len(symbols)
 main_id = os.environ.get('MAIN_ID')
 
 
@@ -32,9 +44,9 @@ async def send_tg_message(img_url, type, n, id) -> None:
             id_ca = [id_c for id_c, value in dp['data']['chats'].items() if value == id_num][0]
             dp['data']['chats'][id_ca] += 1
             logging.info(f'Отправил {img_url} на {id_ca}')
-            await bot.send_photo(id_ca, img_url, caption=f'фото №{n}')
+            await bot.send_photo(id_ca, img_url, caption=f'фото №{n}, предсказано {dp['data'][f'func{n}']['captcha']}')
         else:
-            await bot.send_photo(id, img_url, caption=f'фото №{n}')
+            await bot.send_photo(id, img_url, caption=f'фото №{n}, предсказано {dp['data'][f'func{n}']['captcha']}')
         dp['data'][f'func{n}']['type'] = type
     except Exception as e:
         logging.error(f'Ошибка send_tg_message {e}, {type}')
@@ -45,6 +57,7 @@ async def get_captcha(message: Message) -> None:
     try:
         mes = message.text.split()
         dp['data'][f'func{mes[0]}']['captcha'] = mes[1]
+        dp['data'][f'func{mes[0]}']['predicted'] = False
         await message.answer(f"Принято")
         logging.info(f'ввел капчу {message.chat.username}')
     except Exception as e:
@@ -64,6 +77,7 @@ async def main():
         dp['data']['chats'][str(i)] = 0
     for i in range(int(mode)):
         dp['data'][f'func{i}'] = {
+            'predicted': False,
             'type': '',
             'captcha': ''
         }
@@ -72,11 +86,48 @@ async def main():
     await asyncio.gather(*funcs, dp.start_polling(bot))
 
 
+def get_img(url):
+    X = np.zeros((1, 64, 256, 1))
+    img_data = requests.get(url).content
+    np_array = np.frombuffer(img_data, np.uint8)
+    img = cv2.imdecode(np_array, cv2.IMREAD_GRAYSCALE)
+    img_cropped = img[:, 10:-10]
+    img = cv2.resize(img_cropped, (256, 64))
+    _, img = cv2.threshold(img, 211, 255, cv2.THRESH_BINARY_INV)
+    img = img / 255.0
+    img = np.reshape(img, (64, 256, 1))
+    # X[0] = img
+    return np.array(img)
+
+
+def predict(img, model):
+    symbols = string.ascii_uppercase + "0123456789"  # All symbols captcha can contain
+    res = np.array(model.predict(img[np.newaxis, :, :, np.newaxis]))
+    ans = np.reshape(res, (6, 36))
+    l_ind = []
+    # probs = []
+    for a in ans:
+        l_ind.append(np.argmax(a))
+        # probs.append(np.max(a))
+
+    capt = ''
+    for l in l_ind:
+        capt += symbols[l]
+    return capt  # , sum(probs) / 6
+
+
+async def get_predict(url, num):
+    model = load_model('models/model_v0.0.2.keras')
+    pred = predict(get_img(url), model)
+    dp['data'][f'func{num}']['captcha'] = pred
+    dp['data'][f'func{num}']['predicted'] = True
+
+
 async def captcha_loop(img, type, n):
     await send_tg_message(img, type, n, main_id)
     i = 0
     while True:
-        if not dp['data'][f'func{n}']['captcha']:
+        if not dp['data'][f'func{n}']['captcha'] or dp['data'][f'func{n}']['predicted']:
             i += 1
             if i == 1800:
                 i = 0
@@ -107,7 +158,12 @@ async def auth(login, password, num, driver):
                                            "/tr[4]/td/table/tbody/tr/td[1]/img")
         img_url = capt_element.get_attribute("src")
         img_data = requests.get(img_url).content
-        await captcha_loop(img_url, 'auth', num)
+        if not dp['data'][f'func{num}']['predicted']:
+            await get_predict(img_url, num)
+            # dp['data'][f'func{num}']['captcha'] = '123123123'
+            # dp['data'][f'func{num}']['predicted'] = True
+        else:
+            await captcha_loop(img_url, 'auth', num)
 
         element = driver.find_element(By.XPATH,
                                       "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr["
@@ -127,6 +183,7 @@ async def auth(login, password, num, driver):
             handler.write(img_data)
             logging.info(f'Сохранена капча {dp['data'][f'func{num}']['captcha']}.jpg, {img_data}')
         dp['data'][f'func{num}'] = {
+            'predicted': False,
             'type': '',
             'captcha': ''
         }
@@ -145,10 +202,20 @@ async def messaging(login, password, num):
 
     while True:
         try:
-            dp['data'][f'func{num}'] = {
-                'type': '',
-                'captcha': ''
-            }
+            try:
+                if not dp['data'][f'func{num}']['predicted']:
+                    dp['data'][f'func{num}'] = {
+                        'type': '',
+                        'captcha': '',
+                        'predicted': False
+                    }
+            except KeyError:
+                dp['data'][f'func{num}'] = {
+                    'predicted': False,
+                    'type': '',
+                    'captcha': ''
+                }
+                continue
             if cicle == 19:
                 cicle = 3
                 logging.info(f'Предприятий нет павуза {num, login, password}')
@@ -170,20 +237,23 @@ async def messaging(login, password, num):
                 cicle += 1
                 continue
         except Exception as e:
-            if 'id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr' in e.msg:
+            try:
+                if 'id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr' in e:
+                    cicle = 3
+                    logging.info(f'Предприятий нет павуза {num, login, password}')
+                    await asyncio.sleep(600)
+                    continue
+                elif 'Добыча' in e.msg:
+                    await auth(login, password, num, driver)
+                    logging.info(f'Перезаход {num, login, password}')
+                    continue
+                logging.error(
+                    f'body не найден после driver.get("https://www.heroeswm.ru/map.php") или пустой список предприятий {login, num, cicle, e.msg, password,}', )
                 cicle = 3
-                logging.info(f'Предприятий нет павуза {num, login, password}')
-                await asyncio.sleep(600)
                 continue
-            elif 'Добыча' in e.msg:
-                await auth(login, password, num, driver)
-                logging.info(f'Перезаход {num, login, password}')
-                continue
-            logging.error(
-                f'body не найден после driver.get("https://www.heroeswm.ru/map.php") или пустой список предприятий { login, num, cicle, e.msg, password, }', )
-            cicle = 3
-            continue
-
+            except Exception as e:
+                logging.error(
+                    f' {login, num, cicle, e, password}', )
         if 'Вы уже устроены.' in page_text or 'Прошло меньше часа с последнего устройства на работу. Ждите.' in page_text:
             logging.info(f'Уже устроен {num, login, password}')
             await asyncio.sleep(600)
@@ -192,7 +262,7 @@ async def messaging(login, password, num):
               'На объекте недостаточно золота.' in page_text or 'Защитники предприятия не справились!' in page_text):
             logging.info('переполнен или нет мест или недостаточно золота или Защитники предприятия не справились')
             continue
-        elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text:
+        elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text or 'Вам нужно победить в битве.' in page_text:
             logging.info(f'Слишком высокий штраф трудоголика {num, login, password}')
             await send_tg_message(f'Слишком высокий штраф трудоголика {login, password}', 'alarm', cicle, main_id)
             await asyncio.sleep(600)
@@ -208,7 +278,14 @@ async def messaging(login, password, num):
             else:
                 img_url = capt_element.get_attribute("src")
                 img_data = requests.get(img_url).content
-                await captcha_loop(img_url, 'auth', num)
+                if not dp['data'][f'func{num}']['predicted']:
+                    await get_predict(img_url, num)
+                    # dp['data'][f'func{num}']['captcha'] = 'qweqwe'
+                    # dp['data'][f'func{num}']['predicted'] = True
+                    logging.info(f'Предсказано {dp['data'][f'func{num}']['captcha']}')
+                else:
+                    await captcha_loop(img_url, 'auth', num)
+
                 input_s = driver.find_element(By.CSS_SELECTOR, '#code')
                 input_s.clear()
                 input_s.click()
