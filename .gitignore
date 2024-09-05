@@ -2,3 +2,7 @@ photo
 .idea
 .venv
 .env
+.venvj
+chrome-linux64
+captcha_recognition.ipynb
+app.log

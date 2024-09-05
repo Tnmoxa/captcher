@@ -1,18 +1,13 @@
 import asyncio
 import logging
 import os
-import sys
-import threading
 import requests
-import time
 from dotenv import load_dotenv
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message
@@ -29,15 +24,20 @@ main_id = os.environ.get('MAIN_ID')
 
 async def send_tg_message(img_url, type, n, id) -> None:
     try:
+        bot = dp.get('bot')
+        if type == 'alarm':
+            await bot.send_message(main_id, text=f'СРОЧНО{str(img_url)}')
         if id == 'other':
             id_num = min(dp['data']['chats'].values())
-            id = [id for id, value in dp['data']['chats'].items() if value == id_num][0]
-        bot = dp.get('bot')
+            id_ca = [id_c for id_c, value in dp['data']['chats'].items() if value == id_num][0]
+            dp['data']['chats'][id_ca] += 1
+            logging.info(f'Отправил {img_url} на {id_ca}')
+            await bot.send_photo(id_ca, img_url, caption=f'фото №{n}')
+        else:
+            await bot.send_photo(id, img_url, caption=f'фото №{n}')
         dp['data'][f'func{n}']['type'] = type
-        print('Отправил на ', id)
-        await bot.send_photo(id, img_url, caption=f'фото №{n}')
     except Exception as e:
-        print('Ошибка send_tg_message', e)
+        logging.error(f'Ошибка send_tg_message {e}, {type}')
 
 
 @dp.message()
@@ -46,13 +46,14 @@ async def get_captcha(message: Message) -> None:
         mes = message.text.split()
         dp['data'][f'func{mes[0]}']['captcha'] = mes[1]
         await message.answer(f"Принято")
+        logging.info(f'ввел капчу {message.chat.username}')
     except Exception as e:
-        print('get_captcha_error', e, message.text)
+        logging.error(f'Неправильная капча {e}, {message.text, message.chat.username}')
         await message.answer(f"Неправильный формат, отправь еще раз")
 
 
 async def main():
-    bot = Bot(token='6791529955:AAF2sQa9AFmWnszcQ6q4VtX6hOYnAjvvkAA',
+    bot = Bot(token=os.environ.get('TOKEN'),
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp['bot'] = bot
     dp.bot = bot
@@ -67,7 +68,7 @@ async def main():
             'captcha': ''
         }
         funcs.append(messaging(os.environ.get(f'LOGIN{i}'), os.environ.get(f'PASSWORD{i}'), i))
-    a = dp['data']
+    # await dp.start_polling(bot)
     await asyncio.gather(*funcs, dp.start_polling(bot))
 
 
@@ -76,21 +77,15 @@ async def captcha_loop(img, type, n):
     i = 0
     while True:
         if not dp['data'][f'func{n}']['captcha']:
-
-            # i+=1
-            # if i == 30:
-            #     await send_tg_message(img, type, n, 'other')
+            i += 1
+            if i == 1800:
+                i = 0
             await asyncio.sleep(1)
         else:
             break
 
 
-async def messaging(login, password, num):
-    # a = (login, password, n)
-    # print(login, password, n)
-    # await asyncio.sleep(111111111)
-
-    driver = webdriver.Chrome()
+async def auth(login, password, num, driver):
     driver.get("https://www.heroeswm.ru/")
     element = driver.find_element(By.XPATH, "//*[@title='Логин в игре']")
     element.clear()
@@ -102,130 +97,183 @@ async def messaging(login, password, num):
     element.send_keys(Keys.RETURN)
 
     if driver.current_url == "https://www.heroeswm.ru/login.php":
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        if 'Слишком много неудачных попыток, попробуйте позже.' in page_text:
+            await asyncio.sleep(1800)
+            await auth(login, password, num, driver)
+            return
         capt_element = driver.find_element(By.XPATH,
                                            "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody"
                                            "/tr[4]/td/table/tbody/tr/td[1]/img")
         img_url = capt_element.get_attribute("src")
         img_data = requests.get(img_url).content
         await captcha_loop(img_url, 'auth', num)
-        with open(f'photo/{dp['data'][f'func{num}']['captcha']}.jpg', 'wb') as handler:
-            handler.write(img_data)
 
         element = driver.find_element(By.XPATH,
-                                      "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr[1]/td[2]/input")
+                                      "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr["
+                                      "1]/td[2]/input")
         element.clear()
         element.send_keys(login)
         element = driver.find_element(By.XPATH,
-                                      "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr[2]/td[2]/input")
+                                      "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr["
+                                      "2]/td[2]/input")
         element.clear()
         element.send_keys(password)
         element = driver.find_element(By.XPATH, '/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table'
                                                 '/tbody/tr[4]/td/table/tbody/tr/td[2]/input')
         element.clear()
         element.send_keys(dp['data'][f'func{num}']['captcha'])
+        with open(f'photo/{dp['data'][f'func{num}']['captcha']}.jpg', 'wb') as handler:
+            handler.write(img_data)
+            logging.info(f'Сохранена капча {dp['data'][f'func{num}']['captcha']}.jpg, {img_data}')
         dp['data'][f'func{num}'] = {
             'type': '',
             'captcha': ''
         }
         element.send_keys(Keys.RETURN)
 
-    n = 3
-    # driver.get("https://www.heroeswm.ru/pers_settings.php")
-    # element = driver.find_element(By.XPATH, '/html/body/center/table[2]/tbody/tr/td/table/tbody/tr[6]/td[2]/input[3]')
-    # element.click()
-    # element = driver.find_element(By.XPATH, '/html/body/center/table[2]/tbody/tr/td/table/tbody/tr[1]/td/input')
-    # element.click()
+
+async def messaging(login, password, num):
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--disable-gpu')
+    driver = webdriver.Chrome(options=options)
+
+    await auth(login, password, num, driver)
+
+    cicle = 3
 
     while True:
         try:
-            driver.get("https://www.heroeswm.ru/map.php")
-            element = driver.find_element(By.XPATH, "//*[@hint='Производство']")
-            element.click()
-            await asyncio.sleep(3)
-            content = driver.find_element(By.XPATH,
-                                          f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{n}]')
-            if '»»»' in content.text:
-                button = driver.find_element(By.XPATH,
-                                             f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{n}]/td[5]/a')
-                button.click()
-                await asyncio.sleep(3)
-            elif '»»' in content.text:
-                n += 1
-                continue
-        except Exception as e:
-            await asyncio.sleep(3600)
-        try:
-            capt_element = driver.find_element(By.XPATH, '//*[@id="getjob_form"]/img[1]')
-            img_url = capt_element.get_attribute("src")
-            img_data = requests.get(img_url).content
-            await captcha_loop(img_url, 'auth', num)
-
-            input_s = driver.find_element(By.CSS_SELECTOR, '#code')
-            input_s.clear()
-            input_s.click()
-            for i in range(6):
-                input_s.send_keys(dp['data'][f'func{num}']['captcha'][i])
             dp['data'][f'func{num}'] = {
                 'type': '',
                 'captcha': ''
             }
-            input_s.send_keys(Keys.RETURN)
-            try:
-                input_s = driver.find_element(By.XPATH,
-                                              '/html/body/center/table[2]/tbody/tr/td/table/tbody/tr/td/table[1]/tbody/tr/td/b')
-                if input_s.text == 'Вы устроены на работу!':
-                    with open(f'photo/{dp['data'][f'func{num}']['captcha']}.jpg', 'wb') as handler:
-                        handler.write(img_data)
-                    print(f'Выполнено {login, password}', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-                    await asyncio.sleep(3650)
-            except Exception as e:
-                print(e)
-            try:
-                input_s = driver.find_element(By.XPATH, '/html/body/center/table[2]/tbody/tr/td/table/tbody/tr/td/table[1]/tbody/tr/td/font/b')
-                if input_s.text == 'Введён неправильный код.':
-                    print(f'Неверная капча {login, password}', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-                    continue
-                else:
-                    print(f'Неизвестная ошибка /html/body/center/table[2]/tbody/tr/td/table/tbody/tr/td/table['
-                          f'1]/tbody/tr/td/font/b {login, password}', input_s.text, time.strftime("%Y-%m-%d %H:%M:%S",
-                                                                                    time.localtime()))
-                    await asyncio.sleep(3650)
-                    continue
-            except Exception as e:
-                print(e)
-            try:
-                input_s = driver.find_element(By.XPATH,'/html/body/center/table[2]/tbody/tr/td/table/tbody/tr/td/font')
-                if input_s.text != 'Вы уже устроены.' or input_s.text != 'Прошло меньше часа с последнего устройства на работу. Ждите.':
-                    await asyncio.sleep(3650)
-                elif input_s.text != 'Нет рабочих мест.':
-                    continue
-                else:
-                    print(
-                        f'Неизвестная ошибка /html/body/center/table[2]/tbody/tr/td/table/tbody/tr/td/table['
-                        '1]/tbody/tr/td/font/b {login, password}', input_s.text, time.strftime("%Y-%m-%d %H:%M:%S",
-                                                                                 time.localtime()))
-                    await asyncio.sleep(3650)
-                    continue
-            except Exception as e:
-                raise NoSuchElementException
-        except NoSuchElementException:
-            try:
-                button = driver.find_element(By.XPATH, '//*[@id="wbtn"]')
+            if cicle == 19:
+                cicle = 3
+                logging.info(f'Предприятий нет павуза {num, login, password}')
+                await asyncio.sleep(600)
+            driver.get("https://www.heroeswm.ru/map.php")
+            await asyncio.sleep(1)
+            element = driver.find_element(By.XPATH, "//*[@hint='Добыча']")
+            element.click()
+            await asyncio.sleep(1)
+            content = driver.find_element(By.XPATH,
+                                          f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]')
+            if '»»»' in content.text:
+                button = driver.find_element(By.XPATH,
+                                             f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]/td[5]/a')
                 button.click()
-                print(f'Выполнено {login, password}', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-                await asyncio.sleep(3650)
-            except NoSuchElementException:
-                print(f'Уже устроен {login, password}', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-                await asyncio.sleep(3650)
+                await asyncio.sleep(3)
+                page_text = driver.find_element(By.TAG_NAME, "body").text
+            else:
+                cicle += 1
+                continue
         except Exception as e:
-            print(e, login, password, num, n)
+            if 'id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr' in e.msg:
+                cicle = 3
+                logging.info(f'Предприятий нет павуза {num, login, password}')
+                await asyncio.sleep(600)
+                continue
+            elif 'Добыча' in e.msg:
+                await auth(login, password, num, driver)
+                logging.info(f'Перезаход {num, login, password}')
+                continue
+            logging.error(
+                f'body не найден после driver.get("https://www.heroeswm.ru/map.php") или пустой список предприятий { login, num, cicle, e.msg, password, }', )
+            cicle = 3
             continue
 
-        n = 3
+        if 'Вы уже устроены.' in page_text or 'Прошло меньше часа с последнего устройства на работу. Ждите.' in page_text:
+            logging.info(f'Уже устроен {num, login, password}')
+            await asyncio.sleep(600)
+            continue
+        elif ('Объект переполнен артефактами.' in page_text or 'Нет рабочих мест.' in page_text or
+              'На объекте недостаточно золота.' in page_text or 'Защитники предприятия не справились!' in page_text):
+            logging.info('переполнен или нет мест или недостаточно золота или Защитники предприятия не справились')
+            continue
+        elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text:
+            logging.info(f'Слишком высокий штраф трудоголика {num, login, password}')
+            await send_tg_message(f'Слишком высокий штраф трудоголика {login, password}', 'alarm', cicle, main_id)
+            await asyncio.sleep(600)
+            continue
+        try:
+            button = driver.find_element(By.XPATH, '//*[@id="wbtn"]')
+            try:
+                capt_element = driver.find_element(By.XPATH, '//*[@id="getjob_form"]/img[1]')
+            except NoSuchElementException:
+                button.click()
+                logging.info(f'Выполнено {num, login, password}')
+                await asyncio.sleep(3650)
+            else:
+                img_url = capt_element.get_attribute("src")
+                img_data = requests.get(img_url).content
+                await captcha_loop(img_url, 'auth', num)
+                input_s = driver.find_element(By.CSS_SELECTOR, '#code')
+                input_s.clear()
+                input_s.click()
+                for i in range(6):
+                    input_s.send_keys(dp['data'][f'func{num}']['captcha'][i])
+                input_s.send_keys(Keys.RETURN)
+                try:
+                    page_text = driver.find_element(By.TAG_NAME, "body").text
+                except Exception as e:
+                    logging.error(
+                        f'body не найден после find_element(By.TAG_NAME, "body") {e, login, password, num, cicle}')
+                    cicle += 1
+                    continue
+                if 'Вы устроены на работу!' in page_text:
+                    logging.info(f'Выполнено {num, login, password}')
+                    with open(f'photo/{dp['data'][f'func{num}']['captcha']}.jpg', 'wb') as handler:
+                        handler.write(img_data)
+                        logging.info(
+                            f'Сохранена капча {dp['data'][f'func{num}']['captcha']}.jpg, {num, login, password, img_data}')
+                    dp['data'][f'func{num}'] = {
+                        'type': '',
+                        'captcha': ''
+                    }
+                    await asyncio.sleep(3650)
+                elif 'Введён неправильный код.' in page_text:
+                    logging.info(f'Неверная капча {num, login, password}')
+                    continue
+                elif 'На объекте недостаточно золота.' in page_text:
+                    logging.info(f'На объекте недостаточно золота. {num, login, password}')
+                    continue
+                elif 'Нет рабочих мест.' in page_text:
+                    logging.info(f'Нет рабочих мест. {num, login, password}')
+                    continue
+                else:
+                    logging.info(f'Неизвестное состояние объекта {page_text, num, login, password}')
+        except Exception as e:
+            page_text = driver.find_element(By.TAG_NAME, "body").text
+            if ('Объект переполнен артефактами.' in page_text or 'Нет рабочих мест.' in page_text or
+                    'На объекте недостаточно золота.' in page_text or 'Защитники предприятия не справились!' in page_text):
+                logging.info('переполнен или нет мест или недостаточно золота или Защитники предприятия не справились')
+                continue
+            elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text:
+                logging.info(f'Слишком высокий штраф трудоголика {num, login, password}')
+                await asyncio.sleep(600)
+                continue
+            logging.info(f'Неизвестная ошибка в конце {e, login, password, num, cicle, page_text}')
+            try:
+                await auth(login, password, num, driver)
+            except Exception as e:
+                pass
+            cicle += 1
+            continue
+        cicle = 3
 
     driver.quit()
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Формат сообщения
+        datefmt='%Y-%m-%d %H:%M:%S',
+        filename='app.log',
+        filemode='a'
+    )
+    logging.getLogger('urllib3').setLevel('CRITICAL')
+    logging.getLogger('aiogram.event').setLevel('CRITICAL')
     asyncio.run(main())
