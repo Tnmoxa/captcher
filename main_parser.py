@@ -1,27 +1,24 @@
 import asyncio
 import logging
 import os
-import requests
-from dotenv import load_dotenv
-from PIL import Image
-import numpy as np
 import string
-from io import BytesIO
-import cv2
+import time
+from datetime import datetime, timedelta
 
-from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.by import By
+import cv2
+import numpy as np
+import requests
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message
 from aiogram.enums import ParseMode
-from tensorflow.keras.models import load_model
+from aiogram.types import Message
+from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
-import requests
-import numpy as np
-import cv2
+# from tensorflow.keras.models import load_model
 
 load_dotenv()
 
@@ -81,7 +78,7 @@ async def main():
             'type': '',
             'captcha': ''
         }
-        funcs.append(messaging(os.environ.get(f'LOGIN{i}'), os.environ.get(f'PASSWORD{i}'), i))
+        funcs.append(messaging(os.environ.get(f'LOGIN{i}'), os.environ.get(f'PASSWORD{i}'), i, 'diamonds'))
     # await dp.start_polling(bot)
     await asyncio.gather(*funcs, dp.start_polling(bot))
 
@@ -117,9 +114,9 @@ def predict(img, model):
 
 
 async def get_predict(url, num):
-    model = load_model('models/model_v0.0.2.keras')
-    pred = predict(get_img(url), model)
-    dp['data'][f'func{num}']['captcha'] = pred
+    # model = load_model('models/model_v0.0.3.keras')
+    # pred = predict(get_img(url), model)
+    # dp['data'][f'func{num}']['captcha'] = pred
     dp['data'][f'func{num}']['predicted'] = True
 
 
@@ -190,15 +187,11 @@ async def auth(login, password, num, driver):
         element.send_keys(Keys.RETURN)
 
 
-async def messaging(login, password, num):
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-gpu')
-    driver = webdriver.Chrome(options=options)
-
-    await auth(login, password, num, driver)
+async def jober(driver, login, password, num, flag=''):
 
     cicle = 3
+
+    n = 0
 
     while True:
         try:
@@ -220,22 +213,27 @@ async def messaging(login, password, num):
                 cicle = 3
                 logging.info(f'Предприятий нет павуза {num, login, password}')
                 await asyncio.sleep(600)
-            driver.get("https://www.heroeswm.ru/map.php")
-            await asyncio.sleep(1)
-            element = driver.find_element(By.XPATH, "//*[@hint='Добыча']")
-            element.click()
-            await asyncio.sleep(1)
-            content = driver.find_element(By.XPATH,
-                                          f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]')
-            if '»»»' in content.text:
-                button = driver.find_element(By.XPATH,
-                                             f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]/td[5]/a')
-                button.click()
-                await asyncio.sleep(3)
-                page_text = driver.find_element(By.TAG_NAME, "body").text
+
+            if flag != 'diamonds':
+                driver.get("https://www.heroeswm.ru/map.php")
+                await asyncio.sleep(1)
+                element = driver.find_element(By.XPATH, "//*[@hint='Производство']")
+                element.click()
+                await asyncio.sleep(1)
+                content = driver.find_element(By.XPATH,
+                                              f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]')
+                if '»»»' in content.text:
+                    button = driver.find_element(By.XPATH,
+                                                 f'//*[@id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr[{cicle}]/td[5]/a')
+                    button.click()
+                    await asyncio.sleep(3)
+                    page_text = driver.find_element(By.TAG_NAME, "body").text
+                else:
+                    cicle += 1
+                    continue
             else:
-                cicle += 1
-                continue
+                driver.get("https://www.heroeswm.ru/object-info.php?id=165")
+                page_text = driver.find_element(By.TAG_NAME, "body").text
         except Exception as e:
             try:
                 if 'id="hwm_map_objects_and_buttons"]/div[2]/div[2]/table/tbody/tr' in e:
@@ -243,7 +241,7 @@ async def messaging(login, password, num):
                     logging.info(f'Предприятий нет павуза {num, login, password}')
                     await asyncio.sleep(600)
                     continue
-                elif 'Добыча' in e.msg:
+                elif 'Производство' in e.msg:
                     await auth(login, password, num, driver)
                     logging.info(f'Перезаход {num, login, password}')
                     continue
@@ -256,7 +254,13 @@ async def messaging(login, password, num):
                     f' {login, num, cicle, e, password}', )
         if 'Вы уже устроены.' in page_text or 'Прошло меньше часа с последнего устройства на работу. Ждите.' in page_text:
             logging.info(f'Уже устроен {num, login, password}')
-            await asyncio.sleep(600)
+            await asyncio.sleep(1)
+            continue
+        elif 'Нет рабочих мест.' in page_text and flag == 'diamonds':
+            n += 1
+            if n % 20 == 0:
+                logging.info(f'попытки устроиться на протяжении {n} секунд')
+            await asyncio.sleep(1)
             continue
         elif ('Объект переполнен артефактами.' in page_text or 'Нет рабочих мест.' in page_text or
               'На объекте недостаточно золота.' in page_text or 'Защитники предприятия не справились!' in page_text):
@@ -265,7 +269,7 @@ async def messaging(login, password, num):
         elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text or 'Вам нужно победить в битве.' in page_text:
             logging.info(f'Слишком высокий штраф трудоголика {num, login, password}')
             await send_tg_message(f'Слишком высокий штраф трудоголика {login, password}', 'alarm', cicle, main_id)
-            await asyncio.sleep(600)
+            await asyncio.sleep(3600)
             continue
         try:
             button = driver.find_element(By.XPATH, '//*[@id="wbtn"]')
@@ -274,7 +278,7 @@ async def messaging(login, password, num):
             except NoSuchElementException:
                 button.click()
                 logging.info(f'Выполнено {num, login, password}')
-                await asyncio.sleep(3650)
+                await asyncio.sleep(3595)
             else:
                 img_url = capt_element.get_attribute("src")
                 img_data = requests.get(img_url).content
@@ -309,7 +313,7 @@ async def messaging(login, password, num):
                         'type': '',
                         'captcha': ''
                     }
-                    await asyncio.sleep(3650)
+                    await asyncio.sleep(3595)
                 elif 'Введён неправильный код.' in page_text:
                     logging.info(f'Неверная капча {num, login, password}')
                     continue
@@ -329,7 +333,7 @@ async def messaging(login, password, num):
                 continue
             elif 'Слишком высокий штраф трудоголика - вы не можете устраиваться на производственные предприятия. Попробуйте устроиться на добычу или обработку, или победите в битве.' in page_text:
                 logging.info(f'Слишком высокий штраф трудоголика {num, login, password}')
-                await asyncio.sleep(600)
+                await asyncio.sleep(3650)
                 continue
             logging.info(f'Неизвестная ошибка в конце {e, login, password, num, cicle, page_text}')
             try:
@@ -339,6 +343,111 @@ async def messaging(login, password, num):
             cicle += 1
             continue
         cicle = 3
+
+
+def run_async_in_loop(loop, coro):
+    asyncio.ensure_future(coro, loop=loop)
+
+
+def sleep_until_target_time(login, password, num, target_time_str, driver, url):
+    loop = asyncio.get_running_loop()
+
+    now = datetime.now()
+    if type(target_time_str) == int:
+        target_time = now + timedelta(seconds=int(target_time_str))
+    elif type(target_time_str) == str:
+        target_time = datetime.strptime(target_time_str, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+    else:
+        target_time = target_time_str
+
+    if target_time < now:
+        target_time += timedelta(days=1)
+
+    delay = (target_time - now).total_seconds() + 10
+
+    # delay = 30
+    if delay > 0:
+        print(f"Функция будет вызвана через {delay} секунд.")
+
+        loop.call_at(loop.time() + delay, run_async_in_loop, loop, action(login, password, num, driver, url))
+
+
+async def action(login, password, num, driver, url):
+    driver.get(url)
+    element = driver.find_element(By.XPATH,
+                                  '/html/body/center/table/tbody/tr/td/table/tbody/tr/td/table[1]/tbody/tr/td[1]/a[1]')
+    element.click()
+    element = driver.find_element(By.XPATH,
+                                  '//*[@id="dbut0"]')
+    element.click()
+    while True:
+        element = driver.find_element(By.XPATH, '//*[@id="set_mobile_max_width"]/div[1]')
+        if 'Перемещение' in element.text:
+            time.sleep(1)
+        else:
+            break
+    driver.get(url)
+
+    page_text = driver.find_element(By.TAG_NAME, "body").text
+    if 'Окончание смены:' in page_text:
+        target_time = page_text[page_text.find('Окончание смены: ') + 17:page_text.find('\nСписок')].split(':')
+    else:
+        return
+
+    now = datetime.now()
+
+    first_target_time = now.replace(hour=int(target_time[0]), minute=int(target_time[1]), second=0, microsecond=0)
+
+    second_target_time = now.replace(hour=int(target_time[0]), minute=int(target_time[1]), second=30, microsecond=0)
+
+    end_time = now.replace(hour=int(target_time[0]) + 1, minute=int(target_time[1]) - 1, second=0, microsecond=0)
+
+    if now > first_target_time:
+        first_target_time += timedelta(days=1)
+
+    time_diff = first_target_time - now
+
+    seconds_until_target = int(time_diff.total_seconds())
+
+    if seconds_until_target > 60:
+        time.sleep(seconds_until_target - 20)
+
+    try:
+        driver.get(url)
+        element = driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]')
+    except NoSuchElementException:
+        await auth(login, password, num, driver)
+
+    for i in range(444):
+        try:
+            driver.get(url)
+            element = driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]')
+            element.click()
+            element.click()
+            element.click()
+        except Exception as e:
+            if datetime.now() >= second_target_time:
+                break
+            continue
+
+    sleep_until_target_time(login, password, num, end_time, driver, url)
+
+
+async def messaging(login, password, num, flag=''):
+    options = webdriver.ChromeOptions()
+    # options.add_argument('--headless')
+    # options.add_argument('--disable-gpu')
+    driver = webdriver.Chrome(options=options)
+
+    await auth(login, password, num, driver)
+
+    link_list = [
+        'https://www.heroeswm.ru/object-info.php?id=298',  # 20
+        'https://www.heroeswm.ru/object-info.php?id=188',  # 40
+    ]
+    for i in link_list:
+        await action(login, password, num, driver, i)
+    await jober(driver, login, password, num, flag='diamonds')
 
     driver.quit()
 
