@@ -19,6 +19,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 
+
+
 from tensorflow.keras.models import load_model
 
 load_dotenv()
@@ -38,7 +40,6 @@ model = load_model('models/model_v0.0.3.keras')
 async def get_predict(url, num):
     pred = predict(get_img(url), model)
     dp['data'][f'func{num}']['captcha'] = pred
-    dp['data'][f'func{num}']['predicted'] = True
 
 
 @dp.message()
@@ -46,7 +47,6 @@ async def get_captcha(message: Message) -> None:
     try:
         mes = message.text.split()
         dp['data'][f'func{mes[0]}']['captcha'] = mes[1]
-        dp['data'][f'func{mes[0]}']['predicted'] = False
         await message.answer(f"Принято")
         logging.info(f'ввел капчу {message.chat.username}')
     except Exception as e:
@@ -104,20 +104,27 @@ def predict(img, model):
 
 async def captcha_loop(img, type, n):
     await send_tg_message(img, type, n, main_id)
-    i = 0
-    while True:
-        if not dp['data'][f'func{n}']['captcha'] or dp['data'][f'func{n}']['predicted']:
-            i += 1
-            if i == 1800:
-                i = 0
-            await asyncio.sleep(1)
-        else:
-            break
+    # i = 0
+    # while True:
+    #     if not dp['data'][f'func{n}']['captcha'] or dp['data'][f'func{n}']['predicted']:
+    #         i += 1
+    #         if i == 1800:
+    #             i = 0
+    #         await asyncio.sleep(1)
+    #     else:
+    #         break
 
 
 async def auth(login, password, num, driver):
     driver.get("https://www.heroeswm.ru/")
-    element = driver.find_element(By.XPATH, "//*[@title='Логин в игре']")
+    # but = driver.find_element(By.XPATH, '//*[@id="rXOa8"]/div/label/input')
+    # but.click()
+    while True:
+        try:
+            element = driver.find_element(By.XPATH, "//*[@title='Логин в игре']")
+            break
+        except:
+            pass
     element.clear()
     element.send_keys(login)
     element = driver.find_element(By.XPATH, "//*[@title='Пароль в игре']")
@@ -136,10 +143,7 @@ async def auth(login, password, num, driver):
                                       "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody"
                                       "/tr[4]/td/table/tbody/tr/td[1]/img").get_attribute("src")
         img_data = requests.get(img_url).content
-        if not dp['data'][f'func{num}']['predicted']:
-            await get_predict(img_url, num)
-        else:
-            await captcha_loop(img_url, 'auth', num)
+        await get_predict(img_url, num)
 
         element = driver.find_element(By.XPATH,
                                       "/html/body/center/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr["
@@ -238,22 +242,13 @@ async def action(driver, *args, **kwargs):
             start_buyer(driver, action, *args, **kwargs)
             return
         logging.info(f'Начало скупки{url}')
-        for i in range(444):
+        for i in range(500):
             try:
                 driver.get(url)
                 driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-                driver.get(url)
-                driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-                driver.get(url)
-                driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-                driver.get(url)
-                driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-                driver.get(url)
-                driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-                driver.get(url)
-                driver.find_element(By.XPATH, '//*[@id="buy_res_btn"]').click()
-            except Exception as e:
-                continue
+                break
+            except Exception:
+                pass
         logging.info(f'Конец скупки{url}')
         start_buyer(driver, action, *args, **kwargs)
     except Exception as e:
@@ -292,22 +287,8 @@ async def second_jober(driver, *args, **kwargs):
         start_buyer(driver, second_jober, *args, **kwargs)
         return
     for i in range(444):
-        try:
-            if not dp['data'][f'func{num}']['predicted']:
-                dp['data'][f'func{num}'] = {
-                    'type': '',
-                    'captcha': '',
-                    'predicted': False
-                }
-        except KeyError:
-            dp['data'][f'func{num}'] = {
-                'predicted': False,
-                'type': '',
-                'captcha': ''
-            }
-            continue
         page_text = driver.find_element(By.TAG_NAME, "body").text
-        driver.get('https://www.heroeswm.ru/object-info.php?id=165')
+        driver.get(url)
         if ('Вы уже устроены.' in page_text or 'Прошло меньше часа с последнего устройства на работу. Ждите.' in page_text
                 or 'Нет рабочих мест.' in page_text):
             continue
@@ -326,11 +307,8 @@ async def second_jober(driver, *args, **kwargs):
             else:
                 img_url = capt_element.get_attribute("src")
                 img_data = requests.get(img_url).content
-                if not dp['data'][f'func{num}']['predicted']:
-                    await get_predict(img_url, num)
-                    logging.info(f'Предсказано {dp['data'][f'func{num}']['captcha']}')
-                else:
-                    await captcha_loop(img_url, 'auth', num)
+                await get_predict(img_url, num)
+                logging.info(f'Предсказано {dp['data'][f'func{num}']['captcha']}')
 
                 input_s = driver.find_element(By.CSS_SELECTOR, '#code')
                 input_s.clear()
@@ -357,7 +335,7 @@ async def second_jober(driver, *args, **kwargs):
                     break
                 elif 'Введён неправильный код.' in page_text:
                     logging.info(f'Неверная капча {num, login}')
-                    continue
+                    break
                 else:
                     logging.info(f'Неизвестное состояние объекта {page_text, num, login}')
                     break
@@ -416,22 +394,22 @@ def lots_parser(driver):
 
 
 goods = {
-    'Лук рассвета': {
-        'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&sort=0&art_type=bow17',
-        'min_price': 10250,
-        'max_price': 11000,
-        'min_lots_price': 0,
-        'last_slot': False,
-        'last_slot_name': ''
-    },
-    'Лук полуночи': {
-        'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=bow14',
-        'min_price': 10250,
-        'max_price': 11000,
-        'min_lots_price': 0,
-        'last_slot': False,
-        'last_slot_name': ''
-    },
+    # 'Лук рассвета': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&sort=0&art_type=bow17',
+    #     'min_price': 10250,
+    #     'max_price': 11000,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+     'Лук полуночи': {
+         'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=bow14',
+         'min_price': 10600,
+         'max_price': 11100,
+         'min_lots_price': 0,
+         'last_slot': False,
+         'last_slot_name': ''
+     },
     # 'Меч возрождения': {
     #     'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=firsword15',
     #     'min_price': 18400,
@@ -439,13 +417,86 @@ goods = {
     #     'last_slot': False,
     #     'last_slot_name': ''
     # },
-    # 'Рубиновый меч': {
-    #     'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=mm_sword',
-    #     'min_price': 17800,
+    'Рубиновый меч': {
+        'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=mm_sword',
+        'min_price': 17700,
+        'max_price': 18700,
+        'min_lots_price': 0,
+        'last_slot': False,
+        'last_slot_name': ''
+    },
+    # 'Доспех пламени': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=cuirass&art_type=armor15',
+    #     'min_price': 9400,
+    #     'max_price': 9700,
     #     'min_lots_price': 0,
     #     'last_slot': False,
     #     'last_slot_name': ''
     # },
+    # 'Гладий предвестия': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=weapon&art_type=sword18',
+    #     'min_price': 17914,
+    #     'max_price': 18200,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'огненный кристалл': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=fire_crystal',
+    #     'min_price': 2900,
+    #     'max_price': 4000,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'осколок метеорита': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=meteorit',
+    #     'min_price': 4100,
+    #     'max_price': 4500,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'ядовитый гриб': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=badgrib',
+    #     'min_price': 160,
+    #     'max_price': 200,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'цветок ведьм': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=witch_flower',
+    #     'min_price': 160,
+    #     'max_price': 250,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'цветок ветров': {
+    #         'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=wind_flower',
+    #         'min_price': 6600,
+    #         'max_price': 7000,
+    #         'min_lots_price': 0,
+    #         'last_slot': False,
+    #         'last_slot_name': ''
+    #     },
+    # 'ледяной кристалл': {
+    #     'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=ice_crystal',
+    #     'min_price': 2900,
+    #     'max_price': 3100,
+    #     'min_lots_price': 0,
+    #     'last_slot': False,
+    #     'last_slot_name': ''
+    # },
+    # 'абразив': {
+    #         'link': 'https://www.heroeswm.ru/auction.php?cat=elements&sort=0&art_type=abrasive',
+    #         'min_price': 3100,
+    #         'max_price': 3300,
+    #         'min_lots_price': 0,
+    #         'last_slot': False,
+    #         'last_slot_name': ''
+    #     },
 }
 
 
@@ -496,8 +547,8 @@ async def seller(driver, *args, **kwargs):
             for i in goods_names:
                 if i in text:
                     if goods[i]['min_lots_price'] < goods[i]['min_price'] or goods[i]['last_slot']:
-                        print(goods[i]['min_lots_price'], goods[i]['min_price'])
-                        print(goods[i]['min_lots_price'] < goods[i]['min_price'], goods[i]['last_slot'])
+                        # print(goods[i]['min_lots_price'], goods[i]['min_price'])
+                        # print(goods[i]['min_lots_price'] < goods[i]['min_price'], goods[i]['last_slot'])
                         continue
                     option.click()
                     count_input = driver.find_element(By.XPATH, '//*[@id="anl_count"]')
@@ -525,34 +576,42 @@ async def seller(driver, *args, **kwargs):
             if cell_flag:
                 break
         logging.info('вызов seller')
-        loop.call_at(loop.time() + 600, run_async_in_loop, loop, seller(driver))
+        loop.call_at(loop.time() + 200, run_async_in_loop, loop, seller(driver))
         return
     except Exception as e:
         logging.error(f'ошибка seller {e}')
-        loop.call_at(loop.time() + 600, run_async_in_loop, loop, seller(driver))
+        loop.call_at(loop.time() + 200, run_async_in_loop, loop, seller(driver))
 
 
 async def game_session(login, password, num, flag=''):
     options = webdriver.ChromeOptions()
-    # options.add_argument('--headless')
-    # options.add_argument('--disable-gpu')
+    options.add_argument("start-maximized")
+    options.add_argument("--headless")
+    options.add_argument('--disable-gpu')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     driver = webdriver.Chrome(options=options)
+
+
 
     await auth(login, password, num, driver)
 
     link_list = [
+        # 'https://www.heroeswm.ru/object-info.php?id=309',
         # 'https://www.heroeswm.ru/object-info.php?id=188',
         # 'https://www.heroeswm.ru/object-info.php?id=298',
-        # 'https://www.heroeswm.ru/object-info.php?id=187',
-        # 'https://www.heroeswm.ru/object-info.php?id=189',
         # 'https://www.heroeswm.ru/object-info.php?id=160',
+
+        'https://www.heroeswm.ru/object-info.php?id=187',
+        'https://www.heroeswm.ru/object-info.php?id=189',
+        # 'https://www.heroeswm.ru/object-info.php?id=297'
 
     ]
     start_buyer(driver, second_jober, num=0, flag='diamonds', login=os.environ.get(f'LOGIN{0}'),
                  url='https://www.heroeswm.ru/object-info.php?id=165')
-    # for i in link_list:
-    #     start_buyer(driver, action, url=i)
-    # await seller(driver, flag=True)
+    for i in link_list:
+        start_buyer(driver, action, url=i)
+    await seller(driver, flag=True)
 
 
 async def main():
